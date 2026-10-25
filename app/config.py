@@ -32,6 +32,8 @@ class Settings(BaseSettings):
         if self.oidc_discovery_url not in (None, discovery):
             raise ValueError("Discovery override must match trusted tenant discovery")
         self.oidc_discovery_url = discovery
+        if any(c.isspace() or c in '"\\' for c in self.mcp_public_url):
+            raise ValueError("MCP_PUBLIC_URL must not contain whitespace, quotes or backslashes")
         url = urlsplit(self.mcp_public_url)
         if (
             url.scheme != "https"

@@ -23,7 +23,10 @@ class JWTValidator:
 
     async def _json(self, url: str) -> dict[str, Any]:
         # Never follow issuer redirects; cap response bytes before parsing JSON.
-        async with self.client.stream("GET", url, follow_redirects=False, timeout=5) as response:
+        async with (
+            asyncio.timeout(10),
+            self.client.stream("GET", url, follow_redirects=False, timeout=5) as response,
+        ):
             response.raise_for_status()
             data = bytearray()
             async for chunk in response.aiter_bytes():
@@ -109,6 +112,7 @@ class JWTValidator:
                 raise InvalidToken()
             principal = map_principal(claims, self.settings.tenant_id)
         except (
+            TimeoutError,
             jwt.PyJWTError,
             httpx.HTTPError,
             ValueError,

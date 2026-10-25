@@ -231,3 +231,15 @@ async def test_bad_jwks_fails_closed(settings, issuer, kind):
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         with pytest.raises(InvalidToken):
             await JWTValidator(settings, client).validate(issuer.token())
+
+
+async def test_total_timeout_is_safe_denial(settings, issuer, monkeypatch):
+    from app.auth.principal import InvalidToken
+
+    async def timed_out(url):
+        raise TimeoutError()
+
+    validator = JWTValidator(settings, issuer.client())
+    monkeypatch.setattr(validator, "_json", timed_out)
+    with pytest.raises(InvalidToken):
+        await validator.validate(issuer.token())
