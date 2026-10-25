@@ -243,3 +243,32 @@ async def test_total_timeout_is_safe_denial(settings, issuer, monkeypatch):
     monkeypatch.setattr(validator, "_json", timed_out)
     with pytest.raises(InvalidToken):
         await validator.validate(issuer.token())
+
+
+@pytest.mark.parametrize("tampering", ["wrong-signing-key", "changed-valid-payload"])
+def test_signature_failure_never_executes(settings, issuer, tampering):
+    import base64
+    import json
+
+    original = issuer.token()
+    claims = jwt.decode(original, options={"verify_signature": False})
+    if tampering == "wrong-signing-key":
+        token = jwt.encode(
+            claims, issuer.keys["second"], algorithm="RS256", headers={"kid": "first"}
+        )
+    else:
+        header, payload, signature = original.split(".")
+        claims["sub"] = "tampered-user"
+        payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
+        token = ".".join((header, payload, signature))
+    # Both payloads are valid JSON with otherwise acceptable claims. Only the
+    # cryptographic signature is wrong for the key selected by the trusted kid.
+    assert jwt.decode(token, options={"verify_signature": False})["aud"] == settings.jwt_audience
+
+    async def never(*args):
+        pytest.fail("Invalid signature reached the protected application")
+
+    client = TestClient(AuthMiddleware(never, settings, JWTValidator(settings, issuer.client())))
+    response = client.post("/mcp", headers={"Authorization": "Bearer " + token})
+    assert response.status_code == 401
+    assert response.json() == {"error": "invalid_token"}

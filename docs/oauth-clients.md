@@ -18,6 +18,10 @@ Under **Customize → Connectors → Add custom connector**, enter the remote UR
 
 The current [Claude connector guide](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp) describes published identity, automatic registration and own-client choices. Use the own-client route for this direct Entra pilot; do not presume published identity or automatic registration works with Entra. If your account UI lacks the required option, or discovery/resource/consent fails, record the actual blocker and stop.
 
+## Evidence boundary for S256
+
+The OpenAI source above, under “Publish OAuth metadata from your authorization server,” explicitly requires `code_challenge_methods_supported` to include `S256` and says omission is unsupported. This is a documented client requirement checked on 2026-10-25. We have not fetched the owner's tenant discovery document or attempted a ChatGPT connection; no missing-field observation or live failure has been recorded. Treat this as a conditional acceptance gate, not a confirmed Entra incompatibility.
+
 ## Acceptance record
 
 | Client | OAuth + PKCE | Observed audience | Tool success | Non-member 403 | Outcome |
