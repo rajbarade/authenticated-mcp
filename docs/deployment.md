@@ -30,3 +30,55 @@ Redacted application examples:
 {"event":"auth_denied","status":401,"reason":"invalid_token"}
 {"event":"auth_denied","status":403,"reason":"access_denied"}
 ```
+
+## GitHub Actions → existing Azure App Service `voice-mcp`
+
+The owner authorized direct Python source deployment on 2026-10-27. This supersedes
+“host undecided” above for this particular host; the portable Docker baseline remains
+available. `.github/workflows/deploy-azure.yml` deploys pushes to `main` and supports
+manual reruns on `main`. Changes are submitted through a PR; only Rajesh merges to
+`main`. Feature-branch pushes and PR checks never deploy. Deployments are serialized and only run after `make check`.
+The target is `https://voice-mcp-a9d2g0bpfaaebjhq.westus3-01.azurewebsites.net`.
+
+The owner enters the **repository** secret `AZURE_WEBAPP_PUBLISH_PROFILE` in GitHub.
+The workflow checks presence as a boolean, then passes the value only to the pinned
+Azure deployment action. Never paste a profile into code, a chat, or a workflow log.
+SCM basic authentication was enabled by the owner; this workflow does not modify it.
+
+The ZIP contains only `app/`, `startup.sh`, `.deployment`, `DEPLOYMENT_COMMIT` and
+runtime `requirements.txt` exported from `uv.lock` with hashes and `--require-hashes`.
+It excludes `.env`, local virtualenvs, tests and credentials. The repository-owned
+`.deployment` file requests Kudu/Oryx build automation for this source package, so
+Azure installs the exact locked runtime packages. No Azure app-setting APIs are called.
+Do not use run-from-package mode with this remote-build strategy. If a host override
+prevents the remote build, the owner must inspect it; the workflow does not change
+Azure settings to compensate.
+
+### Owner configuration prerequisite — not assumed or changed by the workflow
+
+Verify these in the existing `voice-mcp` App Service before expecting healthy startup:
+
+- Linux runtime **Python 3.12**.
+- **Settings → Configuration → General settings → Startup Command:** `bash startup.sh`.
+  This ASGI factory is not auto-detected as Flask/Django. With a publish profile,
+  the deployment action cannot set the startup command; the owner controls it.
+- Runtime environment variables from the README: `MCP_PUBLIC_URL` must equal
+  `https://voice-mcp-a9d2g0bpfaaebjhq.westus3-01.azurewebsites.net/mcp`;
+  `AUTH_PROVIDER=entra`; actual `TENANT_ID`; exact tenant-specific `OIDC_ISSUER`;
+  `JWT_AUDIENCE` verified against a real API access token; `REQUIRED_SCOPES=mcp.access`;
+  actual `ALLOWED_GROUP_IDS`; `LOG_LEVEL=INFO`. Discovery URL is optional.
+  No example tenant/group/audience values are uploaded or filled automatically.
+- Existing Entra resource URI/scope alignment, TLS and firewall policy still require
+  the owner's verification; deployment does not create or edit Entra registrations.
+
+A successful Azure deploy step proves source delivery/build acceptance, not healthy
+startup. The next step independently retries `/healthz`, canonical resource metadata,
+and an unauthenticated `/mcp` 401 challenge. A failed readiness step after successful
+deployment must be reported separately. These probes use no credentials and cannot
+prove a real Entra sign-in, group membership result, or ChatGPT/Claude compatibility.
+After owner configuration is corrected, rerun the failed workflow or dispatch it on
+`main`. A missing secret fails before any deployment is attempted.
+
+References checked 2026-10-27: [App Service Python startup/build](https://learn.microsoft.com/en-us/azure/app-service/configure-language-python),
+[Azure deployment action limitations](https://github.com/Azure/webapps-deploy), and
+[Kudu repository deployment settings](https://github.com/projectkudu/kudu/wiki/Configurable-settings).
