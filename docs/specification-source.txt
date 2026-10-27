@@ -1,0 +1,254 @@
+Extracted source; original retained in Library: MCP_Server_Azure_Authentication_Specification(1).docx
+Library ID: libfile_b2bfe56a127c81918f24b45253b658cb
+
+<PARSED TEXT FOR PAGE: 1 / 5>
+Portable MCP Authentication Shell
+Solution design & implementation handoff for Rani | Version 1.0 | October 24, 2026
+
+Target: Python FastMCP “Hello World” secured by Microsoft Entra ID, reusable across identity
+providers and cloud platforms.
+
+
+
+1. Executive decision
+Build a portable Python MCP server over Streamable HTTP and HTTPS, with Entra ID as the
+first OAuth authorization server. Shared authentication middleware validates every bearer
+access token before a tool executes; separate authorization logic checks membership in a
+configured Entra security group. Business tools remain provider-neutral. Use the existing
+personal Azure hosting environment for the pilot, with no corporate tenant dependency.
+
+Phase 1 proves Entra sign-in, group-based access and a hello_world invocation. Future Auth0,
+Cognito or Google integrations are intentionally out of scope, except for clean adapter
+boundaries.
+
+
+
+2. Scope and acceptance
+     One remote MCP endpoint and hello_world(name: str = "world") returning a simple
+      greeting and optionally a non-sensitive user display name.
+     Human delegated OAuth sign-in through Entra; no machine-to-machine grant in v1.
+     A manually managed Entra security group, MCP-Authorized-Users, containing the owner
+      initially; add/remove users without code changes.
+     Discoverable OAuth metadata, protected resource challenges, JWT signature and claim
+      validation, secure errors, token key rotation and structured logs.
+     Reproducible local and Azure deployment and documented connection test for ChatGPT
+      and Claude; each client must be validated separately.
+     No Azure-specific SDK embedded in tools; no premium group-to-enterprise-app assignment
+      needed in v1.
+
+
+
+3. Reference architecture
+User → ChatGPT / Claude MCP client → HTTPS /mcp → authentication middleware →
+authorization policy → FastMCP tool. The client obtains an access token from Entra ID via an
+OAuth authorization code flow with PKCE where supported. Entra signs the token; the MCP
+server verifies it with published JWKS keys. The server is the OAuth protected resource, Entra
+is the authorization server, and the AI product is the OAuth client.
+
+    Component                      Responsibility                   Portable contract
+    MCP endpoint                   FastMCP, Streamable HTTP,        No identity-provider code in
+                                   tools                            tools
+    OAuth metadata                 RFC 9728 protected-resource      Discover authorization
+                                   metadata and 401 challenge       server and resource
+
+            Portable MCP Authentication Shell • Implementation Design • 24 Oct 2026
+<PARSED TEXT FOR PAGE: 2 / 5>
+ Token validator                   OIDC discovery, JWKS cache,     Trusted issuer, audience,
+                                   JWT validation                  algorithms, expiry, scope
+ Access policy                     Check allowed group object      Principal + policy, fail closed
+                                   ID
+ Entra adapter                     Provider claim mapping,         Configured provider-specific
+                                   Entra URLs, overage             module
+                                   behavior
+ Infrastructure                    HTTPS reverse proxy,            Local Docker or Azure
+                                   environment settings,           hosting
+                                   logging
+
+
+
+4. OAuth and security contract
+1.   An unauthenticated MCP request receives HTTP 401 with a WWW-Authenticate Bearer
+     challenge referencing the protected-resource metadata URL; publish RFC 9728 metadata at
+     the appropriate well-known location for the canonical MCP resource.
+2.   Protected-resource metadata lists the canonical resource URL and trusted authorization
+     server(s). Do not confuse this endpoint with the Entra OIDC discovery endpoint.
+3.   The client discovers OAuth authorization and token endpoints; use authorization code +
+     PKCE and approved redirect URIs. Client registration or pre-registration must match actual
+     ChatGPT/Claude support. Do not assume Entra supports every dynamic client-registration
+     mode.
+4.   For Entra, configure the server App Registration for v2 access tokens; select an HTTPS
+     Application ID URI aligned with the canonical MCP resource URL and the MCP resource
+     parameter, per current Microsoft guidance. Expose a delegated scope such as mcp.access.
+5.   The client sends Authorization: Bearer <access_token> on protected MCP calls; the server
+     validates each request, not only the initial connection.
+6.   Middleware uses a maintained security library; OIDC discovery exposes jwks_uri; the
+     validator selects a key by untrusted header kid only within the trusted issuer’s JWKS,
+     checks signature and issuer/audience/time claims, approved algorithms, delegated scope,
+     and tenant constraints.
+7.   After JWT validation, enforce membership in the configured security-group object ID.
+     Reject missing group claim and group-overage claims in v1 (403); document Microsoft
+     Graph membership lookup as optional v2 enhancement. Do not accept arbitrary group
+     names or trust a client-supplied identity.
+
+Security implementation notes: validate issuer exactness; pin approved tenant (not /common
+for a single-tenant pilot); prefer stable object IDs (oid/tid) over email; cache and refresh JWKS
+safely on key rollover; use HTTPS; never log raw access tokens or secrets; separate 401
+unauthenticated from 403 authenticated-but-unauthorized. In a future multi-provider version,
+avoid accepting tokens from alternate issuers for the same resource without explicit trust
+mapping.
+
+
+
+
+           Portable MCP Authentication Shell • Implementation Design • 24 Oct 2026
+<PARSED TEXT FOR PAGE: 3 / 5>
+5. Entra admin walkthrough for the owner
+Precondition: verify that the personal Azure subscription is associated with a tenant where the
+owner can register applications and manage groups. Azure subscription Owner and Entra
+directory admin rights are distinct; check both. Navigate to entra.microsoft.com.
+
+8.   Entra ID → App registrations → New registration. Name: Portable-MCP-HelloWorld-API.
+     Select “Accounts in this organizational directory only” for the pilot. Record Directory
+     (tenant) ID and Application (client) ID.
+9.   App registration → Manifest: set requestedAccessTokenVersion = 2 (or the equivalent
+     manifest field surfaced by the current portal). Save. Confirm v2 access tokens are produced
+     during testing.
+10. Expose an API: configure an HTTPS Application ID URI matching the canonical server
+     resource URL per the current Entra MCP guidance. Add delegated scope mcp.access with
+     appropriate consent descriptions; record full scope value.
+11. Entra ID → Groups → New group → Security. Create MCP-Authorized-Users, membership
+     type Assigned; add the owner; record the immutable Group Object ID.
+12. App registrations → the API → Token configuration → Add groups claim → Security groups.
+     Ensure the claim is configured on ACCESS TOKENS for this API, not solely ID tokens. Do not
+     select “Groups assigned to the application” for this free-tier path.
+13. Enterprise applications: a service principal is normally created automatically for the
+     registered app; do not manually assign the security group through premium group-
+     assignment features. Determine whether “Assignment required?” is off for the v1 custom-
+     policy model, so group authorization is enforced by the API.
+14. Register or configure the OAuth client according to each AI client’s documented connection
+     flow, permitted redirect URIs, delegated API permission and required consent. A client
+     ID/secret is never embedded in the MCP server business logic. Validate client-specific
+     requirements before making claims of compatibility.
+15. Populate server settings, deploy behind public HTTPS, and retrieve the resource metadata
+     and Entra OIDC discovery document. Test the returned jwks_uri and a delegated access
+     token issued to this API.
+
+
+
+6. Configuration and repository contract
+ Setting                                            Purpose / example
+ MCP_PUBLIC_URL                                     https://mcp.example.com/mcp (canonical
+                                                    externally reachable resource)
+ AUTH_PROVIDER                                      entra (future auth0, cognito, google)
+ OIDC_ISSUER                                        Exact Entra tenant-specific issuer discovered
+                                                    for v2 tokens
+ OIDC_DISCOVERY_URL                                 Optional explicit trusted discovery URL
+                                                    override
+ JWT_AUDIENCE                                       Expected audience from actual issued Entra
+                                                    token / configured API identifier
+ REQUIRED_SCOPES                                    mcp.access (match actual scp claim token
+                                                    value)
+
+           Portable MCP Authentication Shell • Implementation Design • 24 Oct 2026
+<PARSED TEXT FOR PAGE: 4 / 5>
+    ALLOWED_GROUP_IDS                                Comma-delimited immutable object IDs; one
+                                                     ID for v1
+    TENANT_ID                                        Entra directory tenant ID
+    LOG_LEVEL                                        INFO; never print bearer tokens
+Implementation must inspect actual v2 Entra tokens in the end-to-end test before finalizing the
+exact accepted aud values; do not guess that the audience is invariably the client ID or URL.
+Validate all configured issuer/audience combinations explicitly.
+
+Suggested repository: app/main.py; app/tools/hello.py;
+app/auth/{middleware.py,principal.py,jwt_validator.py,policies.py,providers/entra.py};
+tests/{test_auth.py,test_group_access.py,test_mcp_flow.py}; docs/{architecture.md,entra-
+setup.md,oauth-clients.md,testing.md,troubleshooting.md,deployment.md}; .env.example;
+Dockerfile; pyproject.toml; README.md.
+
+
+
+7. Repository documentation required from Rani
+     README: prerequisites, startup commands, architecture map, configurable values, and
+      five-minute local smoke test.
+     entra-setup.md: exact portal navigation and screenshots where useful, manual vs
+      automatic tasks, App Registration, v2 tokens, API resource and scope, group creation, group
+      claim, consent, and verification after each action.
+     oauth-clients.md: separately validated connection instructions for ChatGPT and Claude,
+      pre-registered client details/redirect URIs, consent, protected-resource metadata, and any
+      current incompatibilities or workarounds.
+     testing.md: test token acquisition, sample MCP request, positive and negative tests, logs and
+      expected HTTP status codes.
+     troubleshooting.md: invalid_signature, kid/key rollover, mismatched iss/aud, wrong token
+      version, scope missing, group claim absent, overage, 401 metadata discovery, redirect
+      URI/consent errors.
+     deployment.md: local Docker and existing Azure host, TLS, firewall, secret handling, health
+      checks, rollback, and redacted log examples.
+
+
+
+8. Acceptance test matrix
+    Scenario                                         Expected outcome
+    Valid signed token, correct                      hello_world succeeds
+    audience/scope, allowed group
+    No bearer token                                  401 + MCP-compliant discovery challenge
+    Expired / tampered / foreign-issuer token        401; tool never executes
+    Valid token for another API or missing           Reject request; tool never executes
+    delegated scope
+    Valid token, user absent from allowed            403; tool never executes
+    group
+    Groups omitted / overage indicator               403 fail closed in v1
+
+
+            Portable MCP Authentication Shell • Implementation Design • 24 Oct 2026
+<PARSED TEXT FOR PAGE: 5 / 5>
+    Add second user to group, new access           User granted without redeploy
+    token
+    Remove user from group, refresh token          User denied; existing tokens may remain
+                                                   valid until expiry
+    Rotate signing key in issuer JWKS              New key accepted after safe JWKS refresh
+    ChatGPT and Claude OAuth login and tool        Document individual pass/fail; no implied
+    invocation                                     blanket compatibility
+
+
+
+9. Cost, assumptions and exclusions
+Standard App Registrations, service principals, assigned security groups and basic Entra
+identity features are available without Entra ID P1. Microsoft documents that assigning groups
+directly to Enterprise Applications requires P1/P2, so this design instead validates group IDs in
+the API token. Existing Azure hosting, bandwidth, custom DNS/certificates, possible external
+identity features and the AI client’s plan are separate costs; confirm current pricing before
+production rollout. Group overage Graph lookups and advanced Conditional Access are out of
+v1 scope.
+
+Assumptions: personal Entra tenant permits app registration/group management; existing
+Azure server supports public HTTPS; owner has a tenant user (a personal Microsoft account
+alone may require suitable tenant user setup); deployed clients can use compatible OAuth
+registration/consent and redirect patterns.
+
+
+
+10. Definition of done / Rani handoff
+Deliver a Git repository with working source, pinned dependencies, unit/integration tests, no
+committed credentials, and the six documentation files above. Owner must be able to follow
+the setup guide independently in the personal Entra tenant, connect at least one supported
+MCP client, authenticate, get the greeting, then prove a non-member is denied. Record the
+actual outcomes for ChatGPT and Claude separately, including any limitations.
+
+
+
+11. Sources verified October 24, 2026
+     Microsoft: Secure an MCP server with Entra ID —
+      https://learn.microsoft.com/en-us/entra/agent-id/secure-mcp-server-with-entra-id
+     Microsoft: Group claims and overage — https://learn.microsoft.com/en-us/entra/identity-
+      platform/custom-rbac-for-developers
+     Microsoft: Configure group claims and app roles —
+      https://learn.microsoft.com/security/zero-trust/develop/configure-tokens-group-claims-app-
+      roles
+     Microsoft: Group assignment licensing —
+      https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/assign-user-or-group-
+      access-portal
+     MCP authorization specifications — https://modelcontextprotocol.io/specification/2025-11-
+      25/basic/authorization
+
+
+              Portable MCP Authentication Shell • Implementation Design • 24 Oct 2026
