@@ -5,34 +5,53 @@ import os
 import time
 import urllib.error
 import urllib.request
-
-BASE = "https://voice-mcp-a9d2g0bpfaaebjhq.westus3-01.azurewebsites.net"
-METADATA = BASE + "/.well-known/oauth-protected-resource/mcp"
+from urllib.parse import urlsplit
 
 
-def check() -> None:
-    with urllib.request.urlopen(BASE + "/healthz", timeout=8) as response:
+def configured_resource() -> str:
+    """Require an owner-supplied HTTPS resource; never fall back to a personal host."""
+    resource = os.environ.get("MCP_PUBLIC_URL", "")
+    url = urlsplit(resource)
+    if (
+        url.scheme != "https"
+        or not url.hostname
+        or url.path != "/mcp"
+        or url.username
+        or url.password
+        or url.query
+        or url.fragment
+        or any(c.isspace() or c in '"\\' for c in resource)
+    ):
+        raise ValueError("Set MCP_PUBLIC_URL to the intended HTTPS resource ending in /mcp")
+    return resource
+
+
+def check(resource: str) -> None:
+    base = resource.removesuffix("/mcp")
+    metadata_url = base + "/.well-known/oauth-protected-resource/mcp"
+    with urllib.request.urlopen(base + "/healthz", timeout=8) as response:
         if response.status != 200 or json.load(response) != {"status": "ok"}:
             raise ValueError("health endpoint did not return the MCP application's health response")
-    with urllib.request.urlopen(METADATA, timeout=8) as response:
+    with urllib.request.urlopen(metadata_url, timeout=8) as response:
         metadata = json.load(response)
-        if metadata.get("resource") != BASE + "/mcp":
-            raise ValueError("metadata resource differs from the canonical voice-mcp URL")
+        if metadata.get("resource") != resource:
+            raise ValueError("metadata resource differs from the configured canonical URL")
         if not metadata.get("authorization_servers") or not metadata.get("scopes_supported"):
             raise ValueError("metadata is missing authorization server or scope discovery")
-    request = urllib.request.Request(BASE + "/mcp", data=b"{}", method="POST")
+    request = urllib.request.Request(resource, data=b"{}", method="POST")
     try:
         with urllib.request.urlopen(request, timeout=8):
             raise ValueError("unauthenticated MCP request was not rejected")
     except urllib.error.HTTPError as error:
-        if error.code != 401 or METADATA not in error.headers.get("WWW-Authenticate", ""):
+        if error.code != 401 or metadata_url not in error.headers.get("WWW-Authenticate", ""):
             raise ValueError("MCP must return 401 with its canonical discovery challenge") from None
 
 
 def main() -> None:
+    resource = configured_resource()
     for attempt in range(1, 25):
         try:
-            check()
+            check(resource)
         except (OSError, ValueError) as error:
             # Only exception type/status: no response bodies, headers or environment values.
             status = (
@@ -50,7 +69,8 @@ def main() -> None:
             message = (
                 "Public checks passed: health 200, canonical protected-resource metadata, "
                 "unauthenticated MCP 401 with discovery challenge. "
-                "Real Entra authentication and ChatGPT/Claude remain UNTESTED."
+                "These checks do not verify real Entra authentication "
+                "or ChatGPT/Claude compatibility."
             )
             print(message)
             if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
